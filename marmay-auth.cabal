@@ -1,0 +1,94 @@
+cabal-version:      3.4
+name:               marmay-auth
+version:            0.1.0.0
+synopsis:           Shared authentication service and client library
+description:
+    A pure identity provider for applications on a shared trust
+    domain: Office365 OAuth on the service side, short-lived
+    single-use Ed25519 identity assertions towards consumers. The
+    library contains both halves of the protocol - the service
+    (HTTP handlers, Microsoft integration) and everything a
+    consumer needs (assertion validation, replay protection, the
+    client bootstrap script, config loading).
+license:            BSD-3-Clause
+author:             Markus Mayr
+maintainer:         markus.mayr@tuta.com
+category:           Web
+build-type:         Simple
+
+common warnings
+    ghc-options: -Wall -Werror
+
+common extensions
+    default-extensions:
+        DuplicateRecordFields,
+        NoFieldSelectors,
+        OverloadedRecordDot,
+        OverloadedStrings
+
+library
+    import:           warnings, extensions
+    exposed-modules:
+        Marmay.Auth.Assertion
+        Marmay.Auth.Bootstrap
+        Marmay.Auth.ClientConfig
+        Marmay.Auth.ConfigFile
+        Marmay.Auth.HTTP
+        Marmay.Auth.Microsoft
+        Marmay.Auth.OAuth2Config
+        Marmay.Auth.ReplayProtection
+        Marmay.Auth.SecurityConfig
+    build-depends:
+        base >=4.21 && <4.23,
+        aeson,
+        blaze-html,
+        bytestring,
+        containers,
+        cookie,
+        filepath,
+        http-client,
+        http-types,
+        jose >= 0.13,
+        lens,
+        monad-time,
+        mtl,
+        network-uri,
+        servant,
+        servant-blaze,
+        servant-server,
+        stm,
+        text,
+        time,
+        unix,
+        uuid
+    hs-source-dirs:   lib
+    default-language: GHC2024
+
+executable marmay-auth
+    import:           warnings, extensions
+    ghc-options:      -threaded -rtsopts
+    main-is:          Main.hs
+    build-depends:
+        base >=4.21 && <4.23,
+        marmay-auth,
+        http-client-tls,
+        optparse-applicative,
+        servant-server,
+        warp
+    hs-source-dirs:   app
+    default-language: GHC2024
+
+test-suite marmay-auth-test
+    import:           warnings, extensions
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    build-depends:
+        base >=4.21 && <4.23,
+        marmay-auth,
+        jose,
+        lens,
+        network-uri,
+        time,
+        uuid
+    hs-source-dirs:   test
+    default-language: GHC2024

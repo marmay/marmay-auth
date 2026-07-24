@@ -1,0 +1,26 @@
+packages: .
+
+-- GHC 9.14 ships base/boot libraries newer than most Hackage upper
+-- bounds; same relaxations as the parent competences project.
+allow-newer:
+  *:base,
+  *:template-haskell,
+  *:Cabal,
+  *:Cabal-syntax,
+  *:bytestring,
+  *:containers,
+  *:deepseq,
+  *:directory,
+  *:filepath,
+  *:ghc-prim,
+  *:ghc-bignum,
+  *:ghc-internal,
+  *:integer-gmp,
+  *:os-string,
+  *:process,
+  *:text,
+  *:time,
+  *:transformers,
+  *:unix,
+  *:ghc,
+  *:ghc-experimental
