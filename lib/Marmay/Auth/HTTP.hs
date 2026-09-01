@@ -247,9 +247,15 @@ teamsExchangeHandler env mReturn rawToken = do
 
 -- | Pinned teams-js; the auth service has no static-file machinery and
 -- this page is Microsoft-facing anyway, so the CDN is fine. 2.34.0 is
--- the version the Phase 0 gate test ran on.
+-- the version the Phase 0 gate test ran on. The integrity hash pins
+-- the exact bytes (CDN-compromise defense); recompute it together
+-- with any version bump:
+--   curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A
 teamsJsCdnUrl :: Text
 teamsJsCdnUrl = "https://res.cdn.office.net/teams-js/2.34.0/js/MicrosoftTeams.min.js"
+
+teamsJsIntegrity :: Text
+teamsJsIntegrity = "sha384-brW9AazbKR2dYw2DucGgWCCcmrm2oBFV4HQidyuyZRI/TnAkmOOnTARSTdps3Hwt"
 
 -- | The Teams SSO bounce page: the only page of the trust domain that
 -- runs inside the Teams iframe on the auth host. It acquires the AAD
@@ -304,7 +310,11 @@ ssoPage returnUrl = ssoShell $ do
       H.a H.! HA.href "#" H.! HA.id "sso-retry" $ "versuche es erneut"
       ". Diese Seite funktioniert nur innerhalb von Microsoft Teams."
     H.p H.! HA.class_ "detail" H.! HA.id "sso-detail" $ mempty
-  H.script H.! HA.src (H.textValue teamsJsCdnUrl) $ mempty
+  H.script
+    H.! HA.src (H.textValue teamsJsCdnUrl)
+    H.! H.customAttribute "integrity" (H.textValue teamsJsIntegrity)
+    H.! H.customAttribute "crossorigin" "anonymous"
+    $ mempty
   H.script $ preEscapedToHtml $ ssoScript returnUrl
 
 -- | The inline bounce script. @RETURN@ is server-validated and
