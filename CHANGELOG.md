@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0.0 — 2026-09-01
+
+Two-stage tab selector: application, then view.
+
+### Breaking
+
+- **Application registry shape**: `ApplicationEntry` is now
+  `{ name, url, views }` with `views :: [{ name, path }]` — a tab's
+  target is `url <> view.path` (query strings allowed, e.g.
+  `/app/assignments?embedded`). The former `contentUrl`/`websiteUrl`
+  fields are gone. The nixosModule option changed accordingly
+  (`applications.*.views`, defaulting to a single whole-app view), so
+  nix-generated registries migrate by updating the flake input;
+  hand-written registry files must be adapted.
+
+### Changed
+
+- `/teams/config` selects in two stages (application, then view);
+  Save derives entityId (`app/view`), the bounce contentUrl, the
+  websiteUrl escape hatch, and the display name (the view's name when
+  an application has several views, else the application's).
+
 ## 0.2.1.0 — 2026-09-01
 
 The "BG Horn" meta-app surface.

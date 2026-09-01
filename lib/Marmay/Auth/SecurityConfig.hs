@@ -4,6 +4,7 @@ module Marmay.Auth.SecurityConfig
   ( SecurityConfig (.. )
   , TeamsConfig (..)
   , ApplicationEntry (..)
+  , ViewEntry (..)
   , loadSecurityConfig
   )
   where
@@ -38,21 +39,34 @@ data TeamsConfig = TeamsConfig
   }
   deriving (Generic, Show)
 
--- | One selectable target of the "BG Horn" meta-app: a tab shows
--- exactly one of these. URLs are full entry points (they differ per
--- application); the target must allow Teams framing and run the
--- frame-aware bootstrap core. NOT part of 'SecurityConfig': the
--- registry is public data, loaded from a separate unencrypted file
--- (nix-store-rendered) via 'Marmay.Auth.ConfigFile.loadPublicConfigFile'.
+-- | One selectable application of the "BG Horn" meta-app. A tab shows
+-- one view of one application: the selector is two-stage (application,
+-- then view), and the tab's target is @url <> view.path@. The target
+-- must allow Teams framing and run the frame-aware bootstrap core.
+-- NOT part of 'SecurityConfig': the registry is public data, loaded
+-- from a separate unencrypted file (nix-store-rendered) via
+-- 'Marmay.Auth.ConfigFile.loadPublicConfigFile'.
 data ApplicationEntry = ApplicationEntry
   { name :: !Text
-  , contentUrl :: !Text
-  , websiteUrl :: !Text
+  , url :: !Text
+    -- ^ Base URL (origin) of the application, no trailing slash.
+  , views :: ![ViewEntry]
   }
   deriving (Generic, Show)
 
 instance FromJSON ApplicationEntry
 instance ToJSON ApplicationEntry
+
+-- | One view of an application: a path (relative to the application's
+-- base URL, query strings allowed — e.g. @/app/assignments?embedded@).
+data ViewEntry = ViewEntry
+  { name :: !Text
+  , path :: !Text
+  }
+  deriving (Generic, Show)
+
+instance FromJSON ViewEntry
+instance ToJSON ViewEntry
 
 defaultTeamsFrameAncestors :: [Text]
 defaultTeamsFrameAncestors =

@@ -94,13 +94,25 @@ in {
             type = types.str;
             description = "Display name of the application (tab title suggestion).";
           };
-          contentUrl = mkOption {
+          url = mkOption {
             type = types.str;
-            description = "Full entry-point URL a tab shows (rides in the sso bounce's return).";
+            description = "Base URL (origin) of the application, no trailing slash.";
           };
-          websiteUrl = mkOption {
-            type = types.str;
-            description = "Open-in-browser URL Teams offers as escape hatch.";
+          views = mkOption {
+            type = types.listOf (types.submodule {
+              options = {
+                name = mkOption {
+                  type = types.str;
+                  description = "Display name of the view (tab title suggestion).";
+                };
+                path = mkOption {
+                  type = types.str;
+                  description = "Path relative to the application's base URL (query strings allowed).";
+                };
+              };
+            });
+            default = [ { name = "App"; path = ""; } ];
+            description = "Selectable views of this application; a tab shows exactly one.";
           };
         };
       });

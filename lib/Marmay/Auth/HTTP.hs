@@ -380,11 +380,13 @@ ssoScript returnUrl = T.unlines
   ]
 
 -- | The "BG Horn" tab selector (decision 10 of the PoC plan): Teams
--- opens this page inside the add-a-tab dialog; picking an application
--- enables Save, and saving stores the tab's contentUrl — always the
--- sso bounce with the chosen application's URL as @return@ — plus the
--- websiteUrl escape hatch and the suggested display name. The page is
--- teacher-facing and only ever runs inside Teams.
+-- opens this page inside the add-a-tab dialog. Two stages: pick the
+-- application, then one of its views; Save stores the tab's
+-- contentUrl — always the sso bounce with @url <> view.path@ as
+-- @return@ — plus the websiteUrl escape hatch and the suggested
+-- display name (the view's name when the application has several
+-- views, else the application's). The page is teacher-facing and
+-- only ever runs inside Teams.
 teamsConfigHandler :: [ApplicationEntry] -> Handler Html
 teamsConfigHandler applications =
   pure $ teamsPageShell "BG Horn – Registerkarte konfigurieren" $ do
@@ -392,11 +394,13 @@ teamsConfigHandler applications =
     case applications of
       [] -> H.p "Es sind keine Anwendungen konfiguriert."
       apps -> do
-        H.p "Wähle die Anwendung, die diese Registerkarte anzeigen soll."
+        H.p "Wähle Anwendung und Ansicht für diese Registerkarte."
         H.select H.! HA.id "app-select" $ do
           H.option H.! HA.value "" H.! HA.selected "selected" H.! HA.disabled "disabled" $
-            "Bitte auswählen …"
+            "Anwendung auswählen …"
           mapM_ appOption (zip [0 :: Int ..] apps)
+        H.select H.! HA.id "view-select" H.! HA.disabled "disabled" $
+          H.option H.! HA.value "" $ "Ansicht …"
         H.p H.! HA.class_ "detail" H.! HA.id "config-error" H.! HA.hidden "hidden" $ mempty
         H.script
           H.! HA.src (H.textValue teamsJsCdnUrl)
@@ -409,36 +413,60 @@ teamsConfigHandler applications =
       H.option H.! HA.value (H.toValue i) $ H.toHtml app.name
 
 -- | Inline script of the tab selector. APPLICATIONS carries only
--- server-controlled config values (names and URLs from the registry).
+-- server-controlled config values (names, URLs and view paths from
+-- the registry). An application without views gets a synthetic
+-- whole-app view.
 configScript :: [ApplicationEntry] -> Text
 configScript apps = T.unlines
   [ "\"use strict\";"
   , "var APPLICATIONS = " <> jsonText apps <> ";"
-  , "var select = document.getElementById('app-select');"
+  , "var appSelect = document.getElementById('app-select');"
+  , "var viewSelect = document.getElementById('view-select');"
   , "function configFail(detail) {"
   , "  var p = document.getElementById('config-error');"
   , "  p.hidden = false;"
   , "  p.textContent = detail + ' – Diese Seite funktioniert nur innerhalb von Microsoft Teams.';"
   , "}"
-  , "function chosen() {"
-  , "  var i = parseInt(select.value, 10);"
+  , "function chosenApp() {"
+  , "  var i = parseInt(appSelect.value, 10);"
   , "  return isNaN(i) ? null : APPLICATIONS[i];"
+  , "}"
+  , "function viewsOf(app) {"
+  , "  return app.views.length > 0 ? app.views : [{ name: app.name, path: '' }];"
+  , "}"
+  , "function chosenView(app) {"
+  , "  var i = parseInt(viewSelect.value, 10);"
+  , "  var views = viewsOf(app);"
+  , "  return views[isNaN(i) ? 0 : i] || views[0];"
   , "}"
   , "if (typeof microsoftTeams === 'undefined') {"
   , "  configFail('teams-js konnte nicht geladen werden.');"
   , "} else {"
   , "  microsoftTeams.app.initialize().then(function () {"
-  , "    select.addEventListener('change', function () {"
-  , "      microsoftTeams.pages.config.setValidityState(chosen() !== null);"
+  , "    appSelect.addEventListener('change', function () {"
+  , "      var app = chosenApp();"
+  , "      if (!app) { return; }"
+  , "      viewSelect.innerHTML = '';"
+  , "      viewsOf(app).forEach(function (v, i) {"
+  , "        var o = document.createElement('option');"
+  , "        o.value = String(i);"
+  , "        o.textContent = v.name;"
+  , "        viewSelect.appendChild(o);"
+  , "      });"
+  , "      viewSelect.disabled = false;"
+  , "      microsoftTeams.pages.config.setValidityState(true);"
   , "    });"
   , "    microsoftTeams.pages.config.registerOnSaveHandler(function (saveEvent) {"
-  , "      var app = chosen();"
+  , "      var app = chosenApp();"
   , "      if (!app) { saveEvent.notifyFailure('Keine Anwendung ausgewählt.'); return; }"
+  , "      var view = chosenView(app);"
+  , "      var target = app.url + view.path;"
+  , "      var displayName = viewsOf(app).length > 1 ? view.name : app.name;"
   , "      microsoftTeams.pages.config.setConfig({"
-  , "        entityId: app.name,"
-  , "        contentUrl: location.origin + '/teams/sso?return=' + encodeURIComponent(app.contentUrl),"
-  , "        websiteUrl: app.websiteUrl,"
-  , "        suggestedDisplayName: app.name"
+  , "        entityId: app.name + '/' + view.name,"
+  , "        contentUrl: location.origin + '/teams/sso?return=' + encodeURIComponent(target),"
+  , "        websiteUrl: target,"
+  , "        suggestedDisplayName: displayName"
   , "      }).then(function () {"
   , "        saveEvent.notifySuccess();"
   , "      }).catch(function (e) {"
