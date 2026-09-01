@@ -1,8 +1,11 @@
 -- | Permission-checked JSON config loading, shared by the auth
 -- service and its consumers. Refuses secret files readable by
 -- others and config directories writable by others.
+-- 'loadPublicConfigFile' is the sibling for non-secret config
+-- (e.g. nix-store-rendered files, which are world-readable).
 module Marmay.Auth.ConfigFile
   ( forceLoadConfigFile
+  , loadPublicConfigFile
   ) where
 
 import Control.Monad (when)
@@ -21,6 +24,16 @@ forceLoadConfigFile path = do
   case loadResult of
     Left err -> die $ "Failed to parse security config file "
                        <> path <> ": "<> err
+    Right cfg -> pure cfg
+
+-- | Parse-or-die without permission checks, for configuration that is
+-- deliberately public (the Teams application registry).
+loadPublicConfigFile :: forall a. FromJSON a => FilePath -> IO a
+loadPublicConfigFile path = do
+  (loadResult :: Either String a) <- eitherDecodeFileStrict path
+  case loadResult of
+    Left err -> die $ "Failed to parse config file "
+                       <> path <> ": " <> err
     Right cfg -> pure cfg
 
 ensureSecretFileMode :: FilePath -> IO ()

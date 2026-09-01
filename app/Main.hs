@@ -3,7 +3,8 @@ module Main
   ) where
 
 import qualified Options.Applicative as Opt
-import Marmay.Auth.SecurityConfig (loadSecurityConfig, SecurityConfig (..))
+import Marmay.Auth.ConfigFile (loadPublicConfigFile)
+import Marmay.Auth.SecurityConfig (loadSecurityConfig, SecurityConfig (..), ApplicationEntry)
 import Marmay.Auth.OAuth2Config (OAuth2Config (..))
 import Marmay.Auth.HTTP (authServer, authAPI, AuthEnv (..), securityHeaders)
 import Marmay.Auth.Microsoft.AuthTokenValidator (mkJWKSCache)
@@ -15,6 +16,7 @@ import Control.Monad (when)
 data Options = Options
   { port :: !Int
   , securityConfigPath :: !FilePath
+  , applicationsPath :: !(Maybe FilePath)
   } deriving (Eq, Show)
 
 optionsParser :: Opt.ParserInfo Options
@@ -31,6 +33,11 @@ optionsParser =
                       <> Opt.short 'c'
                       <> Opt.metavar "CONFIG"
                       <> Opt.help "Configuration file (JSON) containing secrets." )
+                <*> Opt.optional
+                    ( Opt.strOption
+                        ( Opt.long "applications"
+                          <> Opt.metavar "FILE"
+                          <> Opt.help "Public JSON file with the Teams tab selector's application registry (list of {name, contentUrl, websiteUrl}). Absent = empty registry." ) )
   in 
     Opt.info (options Opt.<**> Opt.helper)
       (Opt.fullDesc
@@ -48,6 +55,12 @@ main = do
   when securityConfig.laxReturnUrlCheck $ do
     putStrLn "WARNING: Lax Return URL check is enabled. This is for development only!"
 
+  applications <- case opts.applicationsPath of
+    Nothing -> pure []
+    Just path -> do
+      putStrLn $ "Loading application registry from: " <> path
+      loadPublicConfigFile @[ApplicationEntry] path
+
   putStrLn $ "Starting to listen on port " <> show opts.port <> "."
   tlsManager <- newTlsManager
   jwksCache <- mkJWKSCache tlsManager securityConfig.oauth2Config.tenantId
@@ -59,5 +72,6 @@ main = do
             { manager = tlsManager
             , securityConfig = securityConfig
             , jwksCache = jwksCache
+            , applications = applications
             }
 

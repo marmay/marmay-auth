@@ -87,6 +87,32 @@ in {
       '';
     };
 
+    applications = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          name = mkOption {
+            type = types.str;
+            description = "Display name of the application (tab title suggestion).";
+          };
+          contentUrl = mkOption {
+            type = types.str;
+            description = "Full entry-point URL a tab shows (rides in the sso bounce's return).";
+          };
+          websiteUrl = mkOption {
+            type = types.str;
+            description = "Open-in-browser URL Teams offers as escape hatch.";
+          };
+        };
+      });
+      default = [ ];
+      description = ''
+        The Teams tab selector's application registry (/teams/config).
+        Public data — rendered into the nix store, separate from the
+        secrets file. Typically derived from the consuming apps'
+        instance attrsets (e.g. one entry per competences class).
+      '';
+    };
+
     nginx = {
       enable = mkEnableOption "Nginx reverse proxy configuration";
 
@@ -129,11 +155,13 @@ in {
         Restart = "always";
         RestartSec = "10s";
 
-        ExecStart = concatStringsSep " " [
+        ExecStart = concatStringsSep " " ([
           "${cfg.package}/bin/marmay-auth"
           "--port ${toString cfg.port}"
           "--config ${cfg.secretsFile}"
-        ];
+        ] ++ lib.optionals (cfg.applications != [ ]) [
+          "--applications ${pkgs.writeText "marmay-auth-applications.json" (builtins.toJSON cfg.applications)}"
+        ]);
 
         # Security hardening; the service holds a signing key and
         # writes nothing, so keep everything private.

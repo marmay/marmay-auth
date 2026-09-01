@@ -303,7 +303,7 @@ exchangeHandlerTests :: (String -> Bool -> IO ()) -> IO ()
 exchangeHandlerTests check = do
   (rsaKey, securityConfig, cache) <- mkSigningRig
   manager <- newManager defaultManagerSettings
-  let env = AuthEnv{manager = manager, securityConfig = securityConfig, jwksCache = cache}
+  let env = AuthEnv{manager = manager, securityConfig = securityConfig, jwksCache = cache, applications = []}
   now <- getCurrentTime
   let freshExp = floor (utcTimeToPOSIXSeconds now) + 600 :: Integer
   token <- signToken rsaKey JWA.RS256 (claimsObject (aadClaims freshExp))

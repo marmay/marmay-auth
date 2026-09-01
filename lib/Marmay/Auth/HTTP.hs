@@ -12,7 +12,7 @@ module Marmay.Auth.HTTP
 
 import Servant (Get, Post, JSON, OctetStream, ReqBody, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err401, err403, err500)
 import Data.Text (Text)
-import Marmay.Auth.SecurityConfig (SecurityConfig(..), TeamsConfig(..))
+import Marmay.Auth.SecurityConfig (SecurityConfig(..), TeamsConfig(..), ApplicationEntry(..))
 import Control.Monad (unless)
 import qualified Data.UUID.V4 as UUID
 import Control.Monad.IO.Class (MonadIO(..))
@@ -70,6 +70,11 @@ type AuthAPI =
   :<|> "teams" :> "sso"
          :> QueryParam "return" Text
          :> Get '[HTML] Html
+  -- The "BG Horn" tab selector: shown by Teams inside the
+  -- add-a-tab dialog (configurationUrl of the manifest). Frameable
+  -- like /teams/sso; carries no auth state.
+  :<|> "teams" :> "config"
+         :> Get '[HTML] Html
 
 authAPI :: Proxy AuthAPI
 authAPI = Proxy
@@ -108,12 +113,16 @@ data AuthEnv = AuthEnv
   { manager :: !Manager
   , securityConfig :: !SecurityConfig
   , jwksCache :: !JWKSCache
+  , applications :: ![ApplicationEntry]
+    -- ^ The Teams tab selector's registry — public config, loaded
+    -- from a separate unencrypted file (see app/Main.hs).
   }
 
 authServer :: AuthEnv -> Server AuthAPI
 authServer env =
   ((loginHandler env.securityConfig) :<|> (callbackHandler env) :<|> (teamsExchangeHandler env))
     :<|> (teamsSsoHandler env.securityConfig)
+    :<|> (teamsConfigHandler env.applications)
 
 loginHandler :: SecurityConfig -> Maybe Text -> Handler Html
 loginHandler securityConfig returnUrl = do
@@ -282,19 +291,24 @@ teamsSsoHandler securityConfig mReturn =
       | otherwise ->
           pure $ ssoPage $ T.pack $ uriToString id returnUrl ""
 
--- | Page skeleton shared by the live page and the error variants.
-ssoShell :: Html -> Html
-ssoShell body = H.docTypeHtml $ do
+-- | Page skeleton shared by the Teams-facing pages (sso bounce,
+-- tab selector) and their error variants.
+teamsPageShell :: Text -> Html -> Html
+teamsPageShell pageTitle body = H.docTypeHtml $ do
   H.head $ do
     H.meta H.! HA.charset "utf-8"
-    H.title "Anmeldung über Microsoft Teams"
+    H.title $ H.toHtml pageTitle
     H.style $ preEscapedToHtml $ T.unlines
       [ "body { font-family: system-ui, sans-serif; display: flex; justify-content: center; padding-top: 4rem; }"
       , ".panel { max-width: 32rem; text-align: center; }"
       , ".detail { font-family: monospace; font-size: 0.8rem; color: #555; word-break: break-all; margin-top: 1rem; }"
       , "a { color: #0369a1; }"
+      , "select { font-size: 1rem; padding: 0.4rem; margin-top: 1rem; min-width: 16rem; }"
       ]
   H.body $ H.div H.! HA.class_ "panel" $ body
+
+ssoShell :: Html -> Html
+ssoShell = teamsPageShell "Anmeldung über Microsoft Teams"
 
 -- | Server-side validation failure: no script, just the message.
 ssoStaticError :: Text -> Html
@@ -363,6 +377,78 @@ ssoScript returnUrl = T.unlines
   , "    ssoFail(String(e && e.message ? e.message : e));"
   , "  });"
   , "})();"
+  ]
+
+-- | The "BG Horn" tab selector (decision 10 of the PoC plan): Teams
+-- opens this page inside the add-a-tab dialog; picking an application
+-- enables Save, and saving stores the tab's contentUrl — always the
+-- sso bounce with the chosen application's URL as @return@ — plus the
+-- websiteUrl escape hatch and the suggested display name. The page is
+-- teacher-facing and only ever runs inside Teams.
+teamsConfigHandler :: [ApplicationEntry] -> Handler Html
+teamsConfigHandler applications =
+  pure $ teamsPageShell "BG Horn – Registerkarte konfigurieren" $ do
+    H.h1 "BG Horn"
+    case applications of
+      [] -> H.p "Es sind keine Anwendungen konfiguriert."
+      apps -> do
+        H.p "Wähle die Anwendung, die diese Registerkarte anzeigen soll."
+        H.select H.! HA.id "app-select" $ do
+          H.option H.! HA.value "" H.! HA.selected "selected" H.! HA.disabled "disabled" $
+            "Bitte auswählen …"
+          mapM_ appOption (zip [0 :: Int ..] apps)
+        H.p H.! HA.class_ "detail" H.! HA.id "config-error" H.! HA.hidden "hidden" $ mempty
+        H.script
+          H.! HA.src (H.textValue teamsJsCdnUrl)
+          H.! H.customAttribute "integrity" (H.textValue teamsJsIntegrity)
+          H.! H.customAttribute "crossorigin" "anonymous"
+          $ mempty
+        H.script $ preEscapedToHtml $ configScript apps
+  where
+    appOption (i, app) =
+      H.option H.! HA.value (H.toValue i) $ H.toHtml app.name
+
+-- | Inline script of the tab selector. APPLICATIONS carries only
+-- server-controlled config values (names and URLs from the registry).
+configScript :: [ApplicationEntry] -> Text
+configScript apps = T.unlines
+  [ "\"use strict\";"
+  , "var APPLICATIONS = " <> jsonText apps <> ";"
+  , "var select = document.getElementById('app-select');"
+  , "function configFail(detail) {"
+  , "  var p = document.getElementById('config-error');"
+  , "  p.hidden = false;"
+  , "  p.textContent = detail + ' – Diese Seite funktioniert nur innerhalb von Microsoft Teams.';"
+  , "}"
+  , "function chosen() {"
+  , "  var i = parseInt(select.value, 10);"
+  , "  return isNaN(i) ? null : APPLICATIONS[i];"
+  , "}"
+  , "if (typeof microsoftTeams === 'undefined') {"
+  , "  configFail('teams-js konnte nicht geladen werden.');"
+  , "} else {"
+  , "  microsoftTeams.app.initialize().then(function () {"
+  , "    select.addEventListener('change', function () {"
+  , "      microsoftTeams.pages.config.setValidityState(chosen() !== null);"
+  , "    });"
+  , "    microsoftTeams.pages.config.registerOnSaveHandler(function (saveEvent) {"
+  , "      var app = chosen();"
+  , "      if (!app) { saveEvent.notifyFailure('Keine Anwendung ausgewählt.'); return; }"
+  , "      microsoftTeams.pages.config.setConfig({"
+  , "        entityId: app.name,"
+  , "        contentUrl: location.origin + '/teams/sso?return=' + encodeURIComponent(app.contentUrl),"
+  , "        websiteUrl: app.websiteUrl,"
+  , "        suggestedDisplayName: app.name"
+  , "      }).then(function () {"
+  , "        saveEvent.notifySuccess();"
+  , "      }).catch(function (e) {"
+  , "        saveEvent.notifyFailure(String(e));"
+  , "      });"
+  , "    });"
+  , "  }).catch(function (e) {"
+  , "    configFail(String(e && e.message ? e.message : e));"
+  , "  });"
+  , "}"
   ]
 
 -- | Throw a ServerError whose body follows the @{error, message}@

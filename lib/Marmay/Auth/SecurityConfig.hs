@@ -3,13 +3,14 @@
 module Marmay.Auth.SecurityConfig
   ( SecurityConfig (.. )
   , TeamsConfig (..)
+  , ApplicationEntry (..)
   , loadSecurityConfig
   )
   where
 
 import GHC.Generics (Generic)
 import Marmay.Auth.OAuth2Config
-import Data.Aeson (FromJSON(..), withObject, (.:), (.:?), (.!=))
+import Data.Aeson (FromJSON(..), ToJSON, withObject, (.:), (.:?), (.!=))
 import qualified Crypto.JOSE as JOSE
 import Marmay.Auth.ConfigFile (forceLoadConfigFile)
 import Data.Time (NominalDiffTime)
@@ -36,6 +37,22 @@ data TeamsConfig = TeamsConfig
     --   when Microsoft's hosting domains churn.
   }
   deriving (Generic, Show)
+
+-- | One selectable target of the "BG Horn" meta-app: a tab shows
+-- exactly one of these. URLs are full entry points (they differ per
+-- application); the target must allow Teams framing and run the
+-- frame-aware bootstrap core. NOT part of 'SecurityConfig': the
+-- registry is public data, loaded from a separate unencrypted file
+-- (nix-store-rendered) via 'Marmay.Auth.ConfigFile.loadPublicConfigFile'.
+data ApplicationEntry = ApplicationEntry
+  { name :: !Text
+  , contentUrl :: !Text
+  , websiteUrl :: !Text
+  }
+  deriving (Generic, Show)
+
+instance FromJSON ApplicationEntry
+instance ToJSON ApplicationEntry
 
 defaultTeamsFrameAncestors :: [Text]
 defaultTeamsFrameAncestors =
