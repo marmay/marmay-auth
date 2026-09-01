@@ -1,6 +1,7 @@
 module Marmay.Auth.HTTP
   ( authServer
   , authAPI
+  , AuthEnv (..)
   ) where
 
 import Servant (Get, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err500)
@@ -20,10 +21,10 @@ import Text.Blaze.Html (Html)
 import Network.URI (parseAbsoluteURI, URI (..), URIAuth (..), uriToString)
 import qualified Data.Text as T
 import Web.Cookie (parseCookies, Cookies)
-import Marmay.Auth.Microsoft (exchangeCodeForToken, getUserInfo, Office365User(..))
+import Marmay.Auth.Microsoft.CodeExchange (exchangeCodeForIdToken)
+import Marmay.Auth.Microsoft.AuthTokenValidator (JWKSCache, validateEntraToken, entraIdentity, EntraIdentity(..))
 import Network.HTTP.Client (Manager)
 import Marmay.Auth.Assertion (IdentityAssertion(..), generateIdentityAssertion')
-import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy(..))
   
 type AuthAPI =
@@ -41,8 +42,16 @@ type AuthAPI =
 authAPI :: Proxy AuthAPI
 authAPI = Proxy
 
-authServer :: Manager -> SecurityConfig -> Server AuthAPI
-authServer tlsManager securityConfig = (loginHandler securityConfig) :<|> (callbackHandler tlsManager securityConfig)
+-- | Everything the handlers need; bundled because threading three
+-- separate parameters through every handler stopped scaling.
+data AuthEnv = AuthEnv
+  { manager :: !Manager
+  , securityConfig :: !SecurityConfig
+  , jwksCache :: !JWKSCache
+  }
+
+authServer :: AuthEnv -> Server AuthAPI
+authServer env = (loginHandler env.securityConfig) :<|> (callbackHandler env)
 
 loginHandler :: SecurityConfig -> Maybe Text -> Handler Html
 loginHandler securityConfig returnUrl = do
@@ -70,8 +79,9 @@ loginHandler securityConfig returnUrl = do
     mkCookie name value =
       ("Set-Cookie", B.concat [name, "=", urlEncode False (encodeUtf8 value), "; HttpOnly; Secure; SameSite=Lax; Path=/auth/callback; Max-Age=600"])
 
-callbackHandler :: Manager -> SecurityConfig -> Maybe Text -> Maybe Text -> Maybe Text -> Handler Html
-callbackHandler tlsManager securityConfig code state cookies = do
+callbackHandler :: AuthEnv -> Maybe Text -> Maybe Text -> Maybe Text -> Handler Html
+callbackHandler env code state cookies = do
+  let securityConfig = env.securityConfig
   code' <- maybe handleMissingCode pure code
   state' <- maybe handleMissingState pure state
   (csrfState, returnUrl) <- maybe handleMissingCookies pure cookies
@@ -82,11 +92,12 @@ callbackHandler tlsManager securityConfig code state cookies = do
     handleNonMatchingCsrfState state' csrfState
   unless (isAllowedReturnUrl securityConfig.laxReturnUrlCheck securityConfig.allowedReturnDomain returnUrl') $
     handleDisallowedReturnUrl
-  token <- liftIO (exchangeCodeForToken tlsManager securityConfig.oauth2Config code')
+  idToken <- liftIO (exchangeCodeForIdToken env.manager securityConfig.oauth2Config code')
              >>= either handleTokenExchangeError pure
-  userInfo <- liftIO (getUserInfo tlsManager token)
-             >>= either handleTokenExchangeError pure
-  identityAssertion <- liftIO (mkIdentityAssertion userInfo)
+  claims <- liftIO (validateEntraToken env.jwksCache securityConfig (B.fromStrict (encodeUtf8 idToken)))
+             >>= either handleIdTokenError pure
+  identity <- either handleIdTokenError pure (entraIdentity claims)
+  identityAssertion <- liftIO (mkIdentityAssertion identity)
   let mintedTokenAudience = returnUrl' { uriPath = "", uriQuery = "", uriFragment = "" }
   mintedToken <- liftIO (generateIdentityAssertion' securityConfig.authIssuerJwk securityConfig.tokenExpiryDuration mintedTokenAudience identityAssertion)
     >>= either handleMintingError pure
@@ -126,6 +137,11 @@ callbackHandler tlsManager securityConfig code state cookies = do
                           [ "Token exchange failed: "
                           , encodeUtf8 $ T.pack err
                           ]}
+    handleIdTokenError err =
+      throwError err500 {errBody = B.fromStrict $ B.concat
+                          [ "id_token validation failed: "
+                          , encodeUtf8 err
+                          ]}
     handleMintingError err =
       throwError err500 {errBody = B.fromStrict $ B.concat
                           [ "Minting failed: "
@@ -142,12 +158,13 @@ callbackHandler tlsManager securityConfig code state cookies = do
         Just v -> pure $ decodeUtf8 $ urlDecode False v
         Nothing -> throwError err400 {errBody = "Missing cookie: " <> B.fromStrict n}
     clearCookie n = ("Set-Cookie", B.concat [n, "=; HttpOnly; Secure; SameSite=Lax; Path=/auth/callback; Max-Age=0"])
-    mkIdentityAssertion office365User = do
+    mkIdentityAssertion identity = do
       assertionId <- UUID.nextRandom
       pure IdentityAssertion
         { assertionId = assertionId
-        , name = office365User.displayName
-        , office365Id = fromMaybe office365User.userPrincipalName office365User.mail 
+        , oid = identity.oid
+        , upn = identity.upn
+        , name = identity.name
         }
 
 isAllowedReturnUrl :: Bool -> Text -> URI -> Bool
@@ -177,7 +194,7 @@ getAuthorizationUrlWithState config state =
     , "&redirect_uri="
     , urlEncode False (encodeUtf8 config.redirectUri)
     , "&response_mode=query"
-    , "&scope=openid%20profile%20email%20User.Read"
+    , "&scope=openid%20profile%20email"
     , "&state="
     , urlEncode False (encodeUtf8 state)
     ]

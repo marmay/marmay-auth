@@ -76,8 +76,9 @@ assertionTests check = do
       assertion =
         IdentityAssertion
           { assertionId = uuid1
+          , oid = "240fec71-0000-4000-8000-000000000001"
+          , upn = "erika@example.com"
           , name = "Erika Musterfrau"
-          , office365Id = "erika@example.com"
           }
 
   generated <- generateIdentityAssertion' signingKey 60 audience assertion

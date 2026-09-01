@@ -3,8 +3,10 @@ module Main
   ) where
 
 import qualified Options.Applicative as Opt
-import Marmay.Auth.SecurityConfig (loadSecurityConfig, SecurityConfig (laxReturnUrlCheck))
-import Marmay.Auth.HTTP (authServer, authAPI)
+import Marmay.Auth.SecurityConfig (loadSecurityConfig, SecurityConfig (..))
+import Marmay.Auth.OAuth2Config (OAuth2Config (..))
+import Marmay.Auth.HTTP (authServer, authAPI, AuthEnv (..))
+import Marmay.Auth.Microsoft.AuthTokenValidator (mkJWKSCache)
 import Network.HTTP.Client.TLS (newTlsManager)
 import Network.Wai.Handler.Warp (run)
 import Servant (serve)
@@ -48,6 +50,13 @@ main = do
 
   putStrLn $ "Starting to listen on port " <> show opts.port <> "."
   tlsManager <- newTlsManager
+  jwksCache <- mkJWKSCache tlsManager securityConfig.oauth2Config.tenantId
   run opts.port $
-    serve authAPI (authServer tlsManager securityConfig)
+    serve authAPI $
+      authServer
+        AuthEnv
+          { manager = tlsManager
+          , securityConfig = securityConfig
+          , jwksCache = jwksCache
+          }
 

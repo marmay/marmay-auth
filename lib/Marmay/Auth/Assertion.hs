@@ -25,13 +25,18 @@ import Data.ByteString.Lazy (ByteString)
 
 data IdentityAssertion = IdentityAssertion
   { assertionId :: !UUID.UUID
+  , oid :: !Text
+    -- ^ Immutable Entra directory object id — the identity key.
+  , upn :: !Text
+    -- ^ Lowercased user principal name — the human-readable
+    --   provisioning matcher, not the key.
   , name :: !Text
-  , office365Id :: !Text
   } deriving (Eq, Show)
 
 data JOSEAssertion = JOSEAssertion
   { jwtClaims :: !JOSE.ClaimsSet
   , userName :: !Text
+  , userUpn :: !Text
   } deriving (Eq, Show)
 
 instance JOSE.HasClaimsSet JOSEAssertion where
@@ -40,11 +45,13 @@ instance FromJSON JOSEAssertion where
   parseJSON = withObject "JOSEAssertion" $ \o -> do
     jwtClaims <- parseJSON (Object o)
     userName <- o .: "https://auth.bu-ki.at/#userName"
-    pure $ JOSEAssertion jwtClaims userName
+    userUpn <- o .: "https://auth.bu-ki.at/#upn"
+    pure $ JOSEAssertion jwtClaims userName userUpn
 instance ToJSON JOSEAssertion where
   toJSON s =
     toJSON s.jwtClaims `merge`
              [ ("https://auth.bu-ki.at/#userName", toJSON s.userName)
+             , ("https://auth.bu-ki.at/#upn", toJSON s.userUpn)
              ]
     where
       merge :: Value -> [(AKV.Key, Value)] -> Value
@@ -54,17 +61,18 @@ instance ToJSON JOSEAssertion where
 mkJOSEAssertion :: JOSE.ClaimsSet -> IdentityAssertion -> JOSEAssertion
 mkJOSEAssertion claimsSet identityAssertion =
   let fullClaimsSet = claimsSet
-       & JOSE.claimSub ?~ JOSE.string # identityAssertion.office365Id
+       & JOSE.claimSub ?~ JOSE.string # identityAssertion.oid
        & JOSE.claimJti ?~ T.pack (show identityAssertion.assertionId)
   in JOSEAssertion{ jwtClaims = fullClaimsSet
                   , userName = identityAssertion.name
+                  , userUpn = identityAssertion.upn
                   }
 
 fromJOSEAssertion :: forall m e. (Monad m, MonadError e m, JOSE.AsJWTError e) => JOSEAssertion -> m IdentityAssertion
-fromJOSEAssertion JOSEAssertion{ jwtClaims, userName } = do
+fromJOSEAssertion JOSEAssertion{ jwtClaims, userName, userUpn } = do
   assertionId <- need "jti" $ jwtClaims ^? JOSE.claimJti . _Just >>= UUID.fromText
-  office365Id <- need "sub" $ jwtClaims ^? (JOSE.claimSub . _Just . JOSE.string)
-  pure $ IdentityAssertion{ assertionId = assertionId, name = userName, office365Id = office365Id }
+  oid <- need "sub" $ jwtClaims ^? (JOSE.claimSub . _Just . JOSE.string)
+  pure $ IdentityAssertion{ assertionId = assertionId, oid = oid, upn = userUpn, name = userName }
 
 generateIdentityAssertion :: JOSE.JWK -> NominalDiffTime -> JOSE.URI -> IdentityAssertion -> IO (Either JOSE.JWTError JOSE.SignedJWT)
 generateIdentityAssertion key expiryDuration uri assertion = JOSE.runJOSE $ generateIdentityAssertion_ key expiryDuration uri assertion
