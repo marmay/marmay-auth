@@ -2,11 +2,12 @@ module Marmay.Auth.HTTP
   ( authServer
   , authAPI
   , AuthEnv (..)
+  , securityHeaders
   ) where
 
 import Servant (Get, Post, JSON, OctetStream, ReqBody, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err401, err403, err500)
 import Data.Text (Text)
-import Marmay.Auth.SecurityConfig (SecurityConfig(..))
+import Marmay.Auth.SecurityConfig (SecurityConfig(..), TeamsConfig(..))
 import Control.Monad (unless)
 import qualified Data.UUID.V4 as UUID
 import Control.Monad.IO.Class (MonadIO(..))
@@ -33,6 +34,7 @@ import GHC.Generics (Generic)
 import Marmay.Auth.Microsoft.CodeExchange (exchangeCodeForIdToken)
 import Marmay.Auth.Microsoft.AuthTokenValidator (JWKSCache, validateEntraToken, entraIdentity, EntraIdentity(..))
 import Network.HTTP.Client (Manager)
+import qualified Network.Wai as Wai
 import Marmay.Auth.Assertion (IdentityAssertion(..), generateIdentityAssertion')
 import Data.Proxy (Proxy(..))
 
@@ -66,6 +68,34 @@ type AuthAPI =
 
 authAPI :: Proxy AuthAPI
 authAPI = Proxy
+
+-- | Security headers as a path-keyed middleware, kept next to
+-- 'AuthAPI' so the prefix table below and the routing above stay in
+-- one screenful. A middleware (rather than per-route Servant Headers)
+-- because the policy must fail closed: it covers thrown responses
+-- (all of the browser flow's 302s and error bodies), 404s, and any
+-- route added later without further opt-in.
+--
+--   /auth/*     -> no-store, frame-ancestors 'none'  (never framed,
+--                  never cached: tokens and cookies travel here)
+--   /teams/*    -> frame-ancestors <Teams allowlist>; /teams/sso is
+--                  an auth page in all but path, so also no-store
+--   everything else -> frame-ancestors 'none'
+securityHeaders :: SecurityConfig -> Wai.Middleware
+securityHeaders securityConfig app req respond =
+  app req (respond . Wai.mapResponseHeaders (headersFor (Wai.pathInfo req) <>))
+  where
+    headersFor path = case path of
+      ("auth" : _) -> [noStore, frameNone]
+      ["teams", "sso"] -> [noStore, frameTeams]
+      ("teams" : _) -> [frameTeams]
+      _ -> [frameNone]
+    noStore = ("Cache-Control", "no-store")
+    frameNone = ("Content-Security-Policy", "frame-ancestors 'none'")
+    frameTeams =
+      ( "Content-Security-Policy"
+      , encodeUtf8 $ "frame-ancestors " <> T.unwords securityConfig.teamsConfig.frameAncestors
+      )
 
 -- | Everything the handlers need; bundled because threading three
 -- separate parameters through every handler stopped scaling.

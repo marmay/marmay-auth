@@ -61,7 +61,8 @@ library
         text,
         time,
         unix,
-        uuid
+        uuid,
+        wai
     hs-source-dirs:   lib
     default-language: GHC2024
 

@@ -5,7 +5,7 @@ module Main
 import qualified Options.Applicative as Opt
 import Marmay.Auth.SecurityConfig (loadSecurityConfig, SecurityConfig (..))
 import Marmay.Auth.OAuth2Config (OAuth2Config (..))
-import Marmay.Auth.HTTP (authServer, authAPI, AuthEnv (..))
+import Marmay.Auth.HTTP (authServer, authAPI, AuthEnv (..), securityHeaders)
 import Marmay.Auth.Microsoft.AuthTokenValidator (mkJWKSCache)
 import Network.HTTP.Client.TLS (newTlsManager)
 import Network.Wai.Handler.Warp (run)
@@ -52,11 +52,12 @@ main = do
   tlsManager <- newTlsManager
   jwksCache <- mkJWKSCache tlsManager securityConfig.oauth2Config.tenantId
   run opts.port $
-    serve authAPI $
-      authServer
-        AuthEnv
-          { manager = tlsManager
-          , securityConfig = securityConfig
-          , jwksCache = jwksCache
-          }
+    securityHeaders securityConfig $
+      serve authAPI $
+        authServer
+          AuthEnv
+            { manager = tlsManager
+            , securityConfig = securityConfig
+            , jwksCache = jwksCache
+            }
 

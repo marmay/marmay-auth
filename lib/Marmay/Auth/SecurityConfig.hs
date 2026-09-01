@@ -30,12 +30,26 @@ data TeamsConfig = TeamsConfig
     -- ^ Application-ID URI of the App registration in Entra.
     --   Only required for a fallback case, when verifying tokens,
     --   usually can be omitted.
+  , frameAncestors :: ![Text]
+    -- ^ Origins allowed to iframe the Teams pages (frame-ancestors
+    --   sources). Defaults to the Microsoft host list; override only
+    --   when Microsoft's hosting domains churn.
   }
   deriving (Generic, Show)
+
+defaultTeamsFrameAncestors :: [Text]
+defaultTeamsFrameAncestors =
+  [ "teams.microsoft.com"
+  , "*.teams.microsoft.com"
+  , "*.office.com"
+  , "*.microsoft365.com"
+  , "*.cloud.microsoft"
+  ]
 
 defaultTeamsConfig :: TeamsConfig
 defaultTeamsConfig = TeamsConfig
   { applicationIdUri = Nothing
+  , frameAncestors = defaultTeamsFrameAncestors
   }
 
 instance FromJSON SecurityConfig where
@@ -49,7 +63,13 @@ instance FromJSON SecurityConfig where
     laxReturnUrlCheck <- o .:? "laxReturnUrlCheck" .!= False
     pure SecurityConfig {..}
 
-instance FromJSON TeamsConfig
+instance FromJSON TeamsConfig where
+  -- Manual instance so a present-but-partial "teamsConfig" object
+  -- still picks up the defaults for omitted keys.
+  parseJSON = withObject "TeamsConfig" $ \o -> do
+    applicationIdUri <- o .:? "applicationIdUri"
+    frameAncestors <- o .:? "frameAncestors" .!= defaultTeamsFrameAncestors
+    pure TeamsConfig {..}
 
 loadSecurityConfig :: FilePath -> IO SecurityConfig
 loadSecurityConfig = forceLoadConfigFile @SecurityConfig
