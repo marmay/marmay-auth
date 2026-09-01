@@ -4,29 +4,40 @@ module Marmay.Auth.HTTP
   , AuthEnv (..)
   ) where
 
-import Servant (Get, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err500)
+import Servant (Get, Post, JSON, OctetStream, ReqBody, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err401, err403, err500)
 import Data.Text (Text)
 import Marmay.Auth.SecurityConfig (SecurityConfig(..))
 import Control.Monad (unless)
 import qualified Data.UUID.V4 as UUID
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.UUID as UUID
+import Data.Aeson ((.=))
+import qualified Data.Aeson as A
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Network.HTTP.Types (urlEncode, urlDecode)
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import Marmay.Auth.OAuth2Config (OAuth2Config(..))
 import Servant.HTML.Blaze (HTML)
 import Text.Blaze.Html (Html)
 import Network.URI (parseAbsoluteURI, URI (..), URIAuth (..), uriToString)
 import qualified Data.Text as T
 import Web.Cookie (parseCookies, Cookies)
+import GHC.Generics (Generic)
 import Marmay.Auth.Microsoft.CodeExchange (exchangeCodeForIdToken)
 import Marmay.Auth.Microsoft.AuthTokenValidator (JWKSCache, validateEntraToken, entraIdentity, EntraIdentity(..))
 import Network.HTTP.Client (Manager)
 import Marmay.Auth.Assertion (IdentityAssertion(..), generateIdentityAssertion')
 import Data.Proxy (Proxy(..))
-  
+
+-- Browser flow (login/callback) and Teams flow (teams/exchange) live
+-- side by side here; both converge on the shared back half below
+-- (mkIdentityAssertion, mintedAudience, isAllowedReturnUrl). Split
+-- Teams routes into their own module only once the shared helpers get
+-- a home of their own.
 type AuthAPI =
   "auth" :>
   ( "login"
@@ -37,6 +48,10 @@ type AuthAPI =
          :> QueryParam "state" Text
          :> Header "Cookie" Text
          :> Get '[HTML] Html
+  :<|> "teams" :> "exchange"
+         :> QueryParam "return" Text
+         :> ReqBody '[OctetStream] BL.ByteString
+         :> Post '[JSON] ExchangeResponse
   )
 
 authAPI :: Proxy AuthAPI
@@ -51,7 +66,7 @@ data AuthEnv = AuthEnv
   }
 
 authServer :: AuthEnv -> Server AuthAPI
-authServer env = (loginHandler env.securityConfig) :<|> (callbackHandler env)
+authServer env = (loginHandler env.securityConfig) :<|> (callbackHandler env) :<|> (teamsExchangeHandler env)
 
 loginHandler :: SecurityConfig -> Maybe Text -> Handler Html
 loginHandler securityConfig returnUrl = do
@@ -98,8 +113,7 @@ callbackHandler env code state cookies = do
              >>= either handleIdTokenError pure
   identity <- either handleIdTokenError pure (entraIdentity claims)
   identityAssertion <- liftIO (mkIdentityAssertion identity)
-  let mintedTokenAudience = returnUrl' { uriPath = "", uriQuery = "", uriFragment = "" }
-  mintedToken <- liftIO (generateIdentityAssertion' securityConfig.authIssuerJwk securityConfig.tokenExpiryDuration mintedTokenAudience identityAssertion)
+  mintedToken <- liftIO (generateIdentityAssertion' securityConfig.authIssuerJwk securityConfig.tokenExpiryDuration (mintedAudience returnUrl') identityAssertion)
     >>= either handleMintingError pure
   throwError err302 {
     errHeaders = [ ("Location", B.concat [ encodeUtf8 returnUrl
@@ -158,14 +172,62 @@ callbackHandler env code state cookies = do
         Just v -> pure $ decodeUtf8 $ urlDecode False v
         Nothing -> throwError err400 {errBody = "Missing cookie: " <> B.fromStrict n}
     clearCookie n = ("Set-Cookie", B.concat [n, "=; HttpOnly; Secure; SameSite=Lax; Path=/auth/callback; Max-Age=0"])
-    mkIdentityAssertion identity = do
-      assertionId <- UUID.nextRandom
-      pure IdentityAssertion
-        { assertionId = assertionId
-        , oid = identity.oid
-        , upn = identity.upn
-        , name = identity.name
-        }
+-- | Successful exchange response; the bounce page reads the assertion
+-- field and forwards it to the instance as the @#itoken=@ fragment.
+newtype ExchangeResponse = ExchangeResponse
+  { assertion :: Text
+  } deriving (Generic, Show)
+
+instance A.ToJSON ExchangeResponse
+
+-- | The Teams SSO exchange: swap a validated AAD token (from
+-- @getAuthToken@ on the bounce page) for an identity assertion whose
+-- audience is the validated @return@ URL's origin. The only supported
+-- caller is the same-origin bounce page; there are deliberately no
+-- CORS headers, so browsers block every cross-origin caller. Errors
+-- follow the @{error, message}@ contract of the consumers' login
+-- endpoints so the client-side dispatch is uniform.
+teamsExchangeHandler :: AuthEnv -> Maybe Text -> BL.ByteString -> Handler ExchangeResponse
+teamsExchangeHandler env mReturn rawToken = do
+  let securityConfig = env.securityConfig
+  returnUrl <- case mReturn >>= parseAbsoluteURI . T.unpack of
+    Nothing -> jsonError err400 "invalid-return" "Missing or unparseable return URL"
+    Just u -> pure u
+  unless (isAllowedReturnUrl securityConfig.laxReturnUrlCheck securityConfig.allowedReturnDomain returnUrl) $
+    jsonError err403 "disallowed-return" "Return URL is outside the trust domain"
+  claims <- liftIO (validateEntraToken env.jwksCache securityConfig rawToken)
+    >>= either (jsonError err401 "invalid-token" . ("Could not validate token: " <>)) pure
+  identity <- either (jsonError err401 "invalid-token") pure (entraIdentity claims)
+  identityAssertion <- liftIO (mkIdentityAssertion identity)
+  minted <- liftIO (generateIdentityAssertion' securityConfig.authIssuerJwk securityConfig.tokenExpiryDuration (mintedAudience returnUrl) identityAssertion)
+    >>= either (jsonError err500 "minting-failed" . T.pack . show) pure
+  pure $ ExchangeResponse $ TL.toStrict $ TLE.decodeUtf8 minted
+
+-- | Throw a ServerError whose body follows the @{error, message}@
+-- contract shared with the consumers' login endpoints.
+jsonError :: forall a. ServerError -> Text -> Text -> Handler a
+jsonError baseError code message =
+  throwError baseError
+    { errBody = A.encode $ A.object ["error" .= code, "message" .= message]
+    , errHeaders = [("Content-Type", "application/json")]
+    }
+
+-- | Shared back half of both login flows: a validated Entra identity
+-- becomes a fresh single-use assertion.
+mkIdentityAssertion :: EntraIdentity -> IO IdentityAssertion
+mkIdentityAssertion identity = do
+  assertionId <- UUID.nextRandom
+  pure IdentityAssertion
+    { assertionId = assertionId
+    , oid = identity.oid
+    , upn = identity.upn
+    , name = identity.name
+    }
+
+-- | The assertion audience for a validated return URL: its origin only.
+-- Byte-exact on the consumer side, so both flows must derive it here.
+mintedAudience :: URI -> URI
+mintedAudience returnUrl = returnUrl { uriPath = "", uriQuery = "", uriFragment = "" }
 
 isAllowedReturnUrl :: Bool -> Text -> URI -> Bool
 isAllowedReturnUrl laxReturnUrlCheck allowedPattern returnUrl =
