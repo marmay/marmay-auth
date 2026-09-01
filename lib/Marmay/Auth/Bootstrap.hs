@@ -27,6 +27,10 @@ data BootstrapConfig = BootstrapConfig
     -- and mints the session token.
   , storageKey :: !Text
     -- ^ Name that is used to store the session token.
+  , teamsSsoPath :: !Text
+    -- ^ Path of the frameable Teams SSO bounce page on the auth service.
+    -- Used as the redirect target when the app runs inside an iframe
+    -- (AAD refuses to render framed, so @/auth/login@ must not be).
   } deriving (Eq, Show)
 
 defaultBootstrapConfig :: BootstrapConfig
@@ -34,6 +38,7 @@ defaultBootstrapConfig = BootstrapConfig
   { authBaseUrl = Nothing
   , loginPath = "/api/login"
   , storageKey = "sessionKey"
+  , teamsSsoPath = "/teams/sso"
   }
 
 -- | Render a value as a JS literal via its JSON encoding (string
@@ -60,17 +65,24 @@ jsonText = TL.toStrict . TLE.decodeUtf8 . Aeson.encode
 -- must stay client-readable), and the redirect-vs-report rule: after
 -- arriving with a fragment we never redirect (we just came from the
 -- auth service; redirecting would loop), without a usable token we
--- always do. @onToken@ receives @null@ in dev mode (no
--- 'authBaseUrl'); @onFailure@'s @retryUrl@ is @null@ in dev mode.
+-- always do. The redirect target is frame-aware: inside an iframe it
+-- is the Teams SSO bounce page ('teamsSsoPath' -- AAD refuses to
+-- render framed, our own page does not), top-level it is
+-- @/auth/login@. Framing by anyone but Teams is expected to be
+-- blocked by the app's frame-ancestors policy, so framed means
+-- Teams. @onToken@ receives @null@ in dev mode (no 'authBaseUrl');
+-- @onFailure@'s @retryUrl@ is @null@ in dev mode.
 bootstrapCoreScript :: BootstrapConfig -> Text
 bootstrapCoreScript BootstrapConfig{..} = T.unlines
   [ "function runAuthBootstrap(hooks) {"
   , "  var AUTH_BASE = " <> jsonText authBaseUrl <> ";"
   , "  var LOGIN_PATH = " <> jsonText loginPath <> ";"
   , "  var KEY = " <> jsonText storageKey <> ";"
+  , "  var TEAMS_SSO_PATH = " <> jsonText teamsSsoPath <> ";"
   , ""
   , "  function loginUrl() {"
-  , "    return AUTH_BASE + '/auth/login?return=' + encodeURIComponent(location.href);"
+  , "    var route = window.self !== window.top ? TEAMS_SSO_PATH : '/auth/login';"
+  , "    return AUTH_BASE + route + '?return=' + encodeURIComponent(location.href);"
   , "  }"
   , ""
   , "  function retryUrl() {"

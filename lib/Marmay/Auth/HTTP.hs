@@ -22,7 +22,10 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Marmay.Auth.OAuth2Config (OAuth2Config(..))
 import Servant.HTML.Blaze (HTML)
-import Text.Blaze.Html (Html)
+import Text.Blaze.Html (Html, preEscapedToHtml)
+import qualified Text.Blaze.Html5 as H
+import qualified Text.Blaze.Html5.Attributes as HA
+import Marmay.Auth.Bootstrap (jsonText)
 import Network.URI (parseAbsoluteURI, URI (..), URIAuth (..), uriToString)
 import qualified Data.Text as T
 import Web.Cookie (parseCookies, Cookies)
@@ -53,6 +56,13 @@ type AuthAPI =
          :> ReqBody '[OctetStream] BL.ByteString
          :> Post '[JSON] ExchangeResponse
   )
+  -- Deliberately NOT under /auth/: everything under /auth/ gets
+  -- frame-ancestors 'none', while this page must be frameable by
+  -- Teams (it is the only place getAuthToken can run — its origin
+  -- is the app registration's Application ID URI host).
+  :<|> "teams" :> "sso"
+         :> QueryParam "return" Text
+         :> Get '[HTML] Html
 
 authAPI :: Proxy AuthAPI
 authAPI = Proxy
@@ -66,7 +76,9 @@ data AuthEnv = AuthEnv
   }
 
 authServer :: AuthEnv -> Server AuthAPI
-authServer env = (loginHandler env.securityConfig) :<|> (callbackHandler env) :<|> (teamsExchangeHandler env)
+authServer env =
+  ((loginHandler env.securityConfig) :<|> (callbackHandler env) :<|> (teamsExchangeHandler env))
+    :<|> (teamsSsoHandler env.securityConfig)
 
 loginHandler :: SecurityConfig -> Maybe Text -> Handler Html
 loginHandler securityConfig returnUrl = do
@@ -202,6 +214,111 @@ teamsExchangeHandler env mReturn rawToken = do
   minted <- liftIO (generateIdentityAssertion' securityConfig.authIssuerJwk securityConfig.tokenExpiryDuration (mintedAudience returnUrl) identityAssertion)
     >>= either (jsonError err500 "minting-failed" . T.pack . show) pure
   pure $ ExchangeResponse $ TL.toStrict $ TLE.decodeUtf8 minted
+
+-- | Pinned teams-js; the auth service has no static-file machinery and
+-- this page is Microsoft-facing anyway, so the CDN is fine. 2.34.0 is
+-- the version the Phase 0 gate test ran on.
+teamsJsCdnUrl :: Text
+teamsJsCdnUrl = "https://res.cdn.office.net/teams-js/2.34.0/js/MicrosoftTeams.min.js"
+
+-- | The Teams SSO bounce page: the only page of the trust domain that
+-- runs inside the Teams iframe on the auth host. It acquires the AAD
+-- token silently (getAuthToken), swaps it at the exchange endpoint,
+-- and forwards the assertion to the validated return URL as the
+-- @#itoken=@ fragment — the same contract the browser callback uses,
+-- so the consuming app cannot tell the flows apart. It never
+-- navigates anywhere else: on failure it renders an in-page panel
+-- (raw error detail included — debuggability over polish; this page
+-- is only ever seen when something is broken) with a reload retry.
+teamsSsoHandler :: SecurityConfig -> Maybe Text -> Handler Html
+teamsSsoHandler securityConfig mReturn =
+  case mReturn >>= parseAbsoluteURI . T.unpack of
+    Nothing ->
+      pure $ ssoShell $ ssoStaticError "Fehlende oder ungültige Rücksprung-Adresse (return)."
+    Just returnUrl
+      | not (isAllowedReturnUrl securityConfig.laxReturnUrlCheck securityConfig.allowedReturnDomain returnUrl) ->
+          pure $ ssoShell $ ssoStaticError "Die Rücksprung-Adresse liegt außerhalb der Vertrauensdomäne."
+      | otherwise ->
+          pure $ ssoPage $ T.pack $ uriToString id returnUrl ""
+
+-- | Page skeleton shared by the live page and the error variants.
+ssoShell :: Html -> Html
+ssoShell body = H.docTypeHtml $ do
+  H.head $ do
+    H.meta H.! HA.charset "utf-8"
+    H.title "Anmeldung über Microsoft Teams"
+    H.style $ preEscapedToHtml $ T.unlines
+      [ "body { font-family: system-ui, sans-serif; display: flex; justify-content: center; padding-top: 4rem; }"
+      , ".panel { max-width: 32rem; text-align: center; }"
+      , ".detail { font-family: monospace; font-size: 0.8rem; color: #555; word-break: break-all; margin-top: 1rem; }"
+      , "a { color: #0369a1; }"
+      ]
+  H.body $ H.div H.! HA.class_ "panel" $ body
+
+-- | Server-side validation failure: no script, just the message.
+ssoStaticError :: Text -> Html
+ssoStaticError message = do
+  H.h1 "Anmeldung fehlgeschlagen"
+  H.p $ H.toHtml message
+
+-- | The live bounce page for a validated return URL.
+ssoPage :: Text -> Html
+ssoPage returnUrl = ssoShell $ do
+  H.div H.! HA.id "sso-status" $ do
+    H.h1 "Anmeldung läuft …"
+    H.p "Du wirst über Microsoft Teams angemeldet."
+  H.div H.! HA.id "sso-error" H.! HA.hidden "hidden" $ do
+    H.h1 "Anmeldung fehlgeschlagen"
+    H.p $ do
+      "Bitte "
+      H.a H.! HA.href "#" H.! HA.id "sso-retry" $ "versuche es erneut"
+      ". Diese Seite funktioniert nur innerhalb von Microsoft Teams."
+    H.p H.! HA.class_ "detail" H.! HA.id "sso-detail" $ mempty
+  H.script H.! HA.src (H.textValue teamsJsCdnUrl) $ mempty
+  H.script $ preEscapedToHtml $ ssoScript returnUrl
+
+-- | The inline bounce script. @RETURN@ is server-validated and
+-- injected as a JSON literal; a parsed absolute URI cannot contain
+-- raw @<@, so it cannot break out of the script element.
+ssoScript :: Text -> Text
+ssoScript returnUrl = T.unlines
+  [ "\"use strict\";"
+  , "var RETURN = " <> jsonText returnUrl <> ";"
+  , "function ssoFail(detail) {"
+  , "  document.getElementById('sso-status').hidden = true;"
+  , "  document.getElementById('sso-error').hidden = false;"
+  , "  document.getElementById('sso-detail').textContent = detail;"
+  , "}"
+  , "document.getElementById('sso-retry').onclick = function (e) {"
+  , "  e.preventDefault();"
+  , "  location.reload();"
+  , "};"
+  , "(function () {"
+  , "  if (typeof microsoftTeams === 'undefined') {"
+  , "    ssoFail('teams-js konnte nicht geladen werden.');"
+  , "    return;"
+  , "  }"
+  , "  microsoftTeams.app.initialize().then(function () {"
+  , "    return microsoftTeams.authentication.getAuthToken();"
+  , "  }).then(function (token) {"
+  , "    return fetch('/auth/teams/exchange?return=' + encodeURIComponent(RETURN), {"
+  , "      method: 'POST',"
+  , "      headers: { 'Content-Type': 'application/octet-stream' },"
+  , "      body: token"
+  , "    }).then(function (resp) {"
+  , "      return resp.json().catch(function () { return {}; }).then(function (data) {"
+  , "        if (resp.ok && data.assertion) {"
+  , "          location.replace(RETURN + '#itoken=' + data.assertion);"
+  , "        } else {"
+  , "          ssoFail((data.error || resp.status) + ': ' + (data.message || 'Unbekannter Fehler'));"
+  , "        }"
+  , "      });"
+  , "    });"
+  , "  }).catch(function (e) {"
+  , "    ssoFail(String(e && e.message ? e.message : e));"
+  , "  });"
+  , "})();"
+  ]
 
 -- | Throw a ServerError whose body follows the @{error, message}@
 -- contract shared with the consumers' login endpoints.
