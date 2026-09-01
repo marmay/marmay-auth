@@ -3,6 +3,11 @@ module Marmay.Auth.HTTP
   , authAPI
   , AuthEnv (..)
   , securityHeaders
+  -- * Exposed for the test suite
+  , teamsExchangeHandler
+  , ExchangeResponse (..)
+  , isAllowedReturnUrl
+  , mintedAudience
   ) where
 
 import Servant (Get, Post, JSON, OctetStream, ReqBody, (:<|>) (..), (:>), QueryParam, Header, Server, Handler, throwError, ServerError (..), err302, err400, err401, err403, err500)

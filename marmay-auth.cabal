@@ -87,10 +87,17 @@ test-suite marmay-auth-test
     build-depends:
         base >=4.21 && <4.23,
         marmay-auth,
+        aeson,
+        bytestring,
+        http-client,
+        http-types,
         jose,
         lens,
         network-uri,
+        servant-server,
+        text,
         time,
-        uuid
+        uuid,
+        wai
     hs-source-dirs:   test
     default-language: GHC2024
