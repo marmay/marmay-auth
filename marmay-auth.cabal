@@ -35,6 +35,7 @@ library
         Marmay.Auth.ConfigFile
         Marmay.Auth.HTTP
         Marmay.Auth.Microsoft
+        Marmay.Auth.Microsoft.AuthTokenValidator
         Marmay.Auth.OAuth2Config
         Marmay.Auth.ReplayProtection
         Marmay.Auth.SecurityConfig
