@@ -1,6 +1,6 @@
 cabal-version:      3.4
 name:               marmay-auth
-version:            0.2.0.0
+version:            0.2.1.0
 synopsis:           Shared authentication service and client library
 description:
     A pure identity provider for applications on a shared trust

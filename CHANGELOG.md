@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1.0 — 2026-09-01
+
+The "BG Horn" meta-app surface.
+
+### Added
+
+- **Teams tab selector** (`GET /teams/config`): shown by Teams inside
+  the add-a-tab dialog; a dropdown over the application registry, and
+  saving stores the tab's contentUrl (the sso bounce with the chosen
+  application's URL as return), websiteUrl and suggested display name.
+- **Public application registry**: loaded from a separate unencrypted
+  file via the new `--applications` flag (`loadPublicConfigFile` — the
+  secrets loader refuses world-readable files, which nix-store paths
+  are). The nixosModule gains a typed
+  `services.marmay-auth.applications` option rendered to that file;
+  consumers publish matching `teamsApplications` outputs.
+- **`teams/`**: the Teams app package — manifest template with a
+  stable app GUID (`package.sh` substitutes domain and client id and
+  zips), school-branded icons.
+
 ## 0.2.0.0 — 2026-09-01
 
 Teams SSO support and the oid-keyed identity model.
