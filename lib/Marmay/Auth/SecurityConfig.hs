@@ -2,6 +2,7 @@
 
 module Marmay.Auth.SecurityConfig
   ( SecurityConfig (.. )
+  , TeamsConfig (..)
   , loadSecurityConfig
   )
   where
@@ -19,9 +20,23 @@ data SecurityConfig = SecurityConfig
   , authIssuerJwk :: !JOSE.JWK
   , allowedReturnDomain :: !Text
   , tokenExpiryDuration :: !NominalDiffTime
+  , teamsConfig :: !TeamsConfig
   , laxReturnUrlCheck :: !Bool
   }
   deriving (Generic, Show)
+
+data TeamsConfig = TeamsConfig
+  { applicationIdUri :: !(Maybe Text)
+    -- ^ Application-ID URI of the App registration in Entra.
+    --   Only required for a fallback case, when verifying tokens,
+    --   usually can be omitted.
+  }
+  deriving (Generic, Show)
+
+defaultTeamsConfig :: TeamsConfig
+defaultTeamsConfig = TeamsConfig
+  { applicationIdUri = Nothing
+  }
 
 instance FromJSON SecurityConfig where
   -- Manual parseJSON with default values for tokenExpiryDuration and laxReturnUrlCheck:
@@ -30,8 +45,11 @@ instance FromJSON SecurityConfig where
     authIssuerJwk <- o .: "authIssuerJwk"
     allowedReturnDomain <- o .: "allowedReturnDomain"
     tokenExpiryDuration <- o .:? "tokenExpiryDuration" .!= 60
+    teamsConfig <- o .:? "teamsConfig" .!= defaultTeamsConfig
     laxReturnUrlCheck <- o .:? "laxReturnUrlCheck" .!= False
     pure SecurityConfig {..}
+
+instance FromJSON TeamsConfig
 
 loadSecurityConfig :: FilePath -> IO SecurityConfig
 loadSecurityConfig = forceLoadConfigFile @SecurityConfig
