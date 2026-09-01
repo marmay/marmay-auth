@@ -1,0 +1,38 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "ad33e067-a70c-4ee6-9c27-6ba0d653cc99",
+  "developer": {
+    "name": "BG Horn",
+    "websiteUrl": "https://@APEX@",
+    "privacyUrl": "https://@APEX@",
+    "termsOfUseUrl": "https://@APEX@"
+  },
+  "name": {
+    "short": "BG Horn",
+    "full": "BG Horn Schulanwendungen"
+  },
+  "description": {
+    "short": "Interne Anwendungen des BG Horn als Registerkarten",
+    "full": "Bindet die internen Anwendungen des BG Horn (Kompetenzraster der Klassen, Website-Redaktion) als Registerkarten in Teams ein. Beim Hinzufügen einer Registerkarte wird die gewünschte Anwendung ausgewählt; die Anmeldung erfolgt automatisch über das Schulkonto."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0284C7",
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://auth.@APEX@/teams/config",
+      "scopes": ["team"],
+      "canUpdateConfiguration": true
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": ["@APEX@", "*.@APEX@"],
+  "webApplicationInfo": {
+    "id": "@CLIENT_ID@",
+    "resource": "api://auth.@APEX@/@CLIENT_ID@"
+  }
+}
