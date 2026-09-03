@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APEX="${APEX:-bu-ki.at}"
+APEX="${APEX:-s.bghorn.ac.at}"
 CLIENT_ID="${CLIENT_ID:-9bbc5abe-5eaf-4f2f-a000-35f9d6dd47d0}"
 
 sed -e "s/@APEX@/${APEX}/g" -e "s/@CLIENT_ID@/${CLIENT_ID}/g" \
