@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1.0 — 2026-09-26
+
+Display names in "Vorname Nachname" order.
+
+### Added
+
+- `EntraClaims` carries the Entra optional claims `given_name` and
+  `family_name`; `entraIdentity` builds the display name as
+  `given_name family_name` when both are present and non-blank, falling
+  back to `name` (then the upn) as before. Both login flows (browser ID
+  token, Teams SSO access token) share the extraction, so the app
+  registration must add the optional claims to both token types
+  (README, "Display names").
+
 ## 0.3.0.0 — 2026-09-01
 
 Two-stage tab selector: application, then view.

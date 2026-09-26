@@ -257,6 +257,19 @@ entraValidationTests check = do
           check "identity upn is the lowercased preferred_username" (identity.upn == "erika.musterfrau@example.com")
           check "identity name comes from the name claim" (identity.name == "Erika Musterfrau")
 
+  -- The optional claims, once the app registration sends them, take
+  -- precedence over the tenant's "Nachname Vorname" display name.
+  let identityName claims = either (const Nothing) (Just . (.name)) . entraIdentity =<< either (const Nothing) Just claims
+      withParts g f = override "name" (A.String "Musterfrau Erika") . override "given_name" (A.String g) . override "family_name" (A.String f)
+  fullName <- validate (withParts "Erika" "Musterfrau" (aadClaims freshExp))
+  check "given_name + family_name form the display name" (identityName fullName == Just "Erika Musterfrau")
+  onlyGiven <- validate (remove "family_name" (withParts "Erika" "Musterfrau" (aadClaims freshExp)))
+  check "a lone given_name falls back to the name claim" (identityName onlyGiven == Just "Musterfrau Erika")
+  blankFamily <- validate (withParts "Erika" "  " (aadClaims freshExp))
+  check "a blank family_name falls back to the name claim" (identityName blankFamily == Just "Musterfrau Erika")
+  paddedParts <- validate (withParts " Erika " " Musterfrau " (aadClaims freshExp))
+  check "name parts are trimmed" (identityName paddedParts == Just "Erika Musterfrau")
+
   appIdUriAudience <- validate (override "aud" (A.String testAppIdUri) (aadClaims freshExp))
   check "application-id-uri audience is also accepted" (either (const False) (const True) appIdUriAudience)
 

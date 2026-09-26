@@ -136,6 +136,9 @@ fetchAndStore cache now = do
 -- | Claims of an AAD-issued v2.0 token. @oid@ is the immutable
 -- directory object id and the identity key; the username claims are
 -- optional in v2 tokens (usually only @preferred_username@ arrives).
+-- @given_name@ / @family_name@ are Entra *optional claims*: they arrive
+-- only once the app registration's token configuration adds them (for
+-- the ID token -- browser flow -- and the access token -- Teams SSO).
 data EntraClaims = EntraClaims
   { jwtClaims :: !JOSE.ClaimsSet
   , oid :: !Text
@@ -143,6 +146,8 @@ data EntraClaims = EntraClaims
   , upn :: !(Maybe Text)
   , email :: !(Maybe Text)
   , name :: !(Maybe Text)
+  , givenName :: !(Maybe Text)
+  , familyName :: !(Maybe Text)
   }
   deriving (Eq, Show)
 
@@ -158,6 +163,8 @@ instance FromJSON EntraClaims where
       <*> o .:? "upn"
       <*> o .:? "email"
       <*> o .:? "name"
+      <*> o .:? "given_name"
+      <*> o .:? "family_name"
 
 -- | The identity both login flows feed into assertion minting.
 data EntraIdentity = EntraIdentity
@@ -168,7 +175,9 @@ data EntraIdentity = EntraIdentity
   deriving (Eq, Show)
 
 -- | Shared identity extraction: @preferred_username ?? upn ?? email@,
--- lowercased; display name falls back to the upn.
+-- lowercased. The display name is @given_name family_name@ when both
+-- arrive (the tenant's own @name@ is "Nachname Vorname", which reads
+-- wrong wherever the name is published), else @name@, else the upn.
 entraIdentity :: EntraClaims -> Either Text EntraIdentity
 entraIdentity claims =
   case claims.preferredUsername <|> claims.upn <|> claims.email of
@@ -179,8 +188,16 @@ entraIdentity claims =
           EntraIdentity
             { oid = claims.oid
             , upn = lowered
-            , name = fromMaybe lowered claims.name
+            , name = fromMaybe lowered (fullName <|> claims.name)
             }
+  where
+    -- Both parts present and non-blank; a lone or blank part falls through
+    -- to the name claim rather than yielding a half name.
+    fullName = do
+      g <- nonBlank =<< claims.givenName
+      f <- nonBlank =<< claims.familyName
+      pure (g <> " " <> f)
+    nonBlank t = let s = T.strip t in if T.null s then Nothing else Just s
 
 -- | Validate a compact-encoded AAD token: RS256 against the tenant
 -- JWKS (key selected by @kid@), byte-exact tenant issuer, audience in

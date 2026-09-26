@@ -78,6 +78,18 @@ JSON file (must be `0400`/`0600`; the loader refuses laxer modes):
 (dev only) additionally admits `http` and explicit ports; the service
 warns loudly at startup.
 
+### Display names (Entra optional claims)
+
+The asserted display name is `given_name family_name` when both claims
+arrive, otherwise the token's `name` (the tenant's display name -- often
+"Nachname Vorname"), otherwise the upn. Entra sends `given_name` and
+`family_name` only as *optional claims*: in the app registration under
+**Token configuration**, add both for the **ID token** (browser flow)
+*and* the **access token** (Teams SSO, which validates the token from
+`getAuthToken`). Consumers that persist the name at first login (e.g.
+provisioning) do not pick up the new order for existing accounts on
+their own.
+
 ## Deployment
 
 The flake exports `nixosModules.marmay-auth`; the package default is
